@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Product Import Export
  * Plugin URI: https://example.com/
  * Description: Export and Import WooCommerce products with support for all product types, variations, and custom meta.
- * Version: 1.1.1
+ * Version: 1.2.3
  * Author: Your Name
  * Author URI: https://example.com/
  * Text Domain: wc-product-import-export

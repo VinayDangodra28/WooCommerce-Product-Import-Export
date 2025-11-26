@@ -24,54 +24,36 @@ class WC_PIE_Ajax {
         add_action('wp_ajax_pie_analyze_import', array($this, 'analyze_import'));
         add_action('wp_ajax_pie_process_zip_import', array($this, 'process_zip_import'));
         
-        add_action('wp_ajax_pie_preview_export', array($this, 'preview_export'));
-        add_action('wp_ajax_preview_export', array($this, 'preview_export')); // Legacy support
+        // add_action('wp_ajax_pie_preview_export', array($this, 'preview_export')); // Removed
+        // add_action('wp_ajax_preview_export', array($this, 'preview_export')); // Legacy support - Removed
+        add_action('wp_ajax_pie_get_export_count', array($this, 'get_export_count')); // New action for live count
         add_action('wp_ajax_pie_view_logs', array($this, 'view_logs'));
         add_action('wp_ajax_pie_clear_logs', array($this, 'clear_logs'));
     }
 
+    /*
     public function preview_export() {
-        WC_PIE_Logger::log('PREVIEW EXPORT STARTED');
+        // ... code removed ...
+    }
+    */
+
+    public function get_export_count() {
         check_ajax_referer('product_ie_nonce', 'nonce');
         
         if (!current_user_can('manage_woocommerce')) {
-            WC_PIE_Logger::log('PREVIEW EXPORT - Permission denied');
             wp_send_json_error('Insufficient permissions');
         }
         
-        $filters = $_POST; // Sanitize in exporter
-        WC_PIE_Logger::log('PREVIEW EXPORT - Raw POST data', $_POST);
-        
+        $filters = $_POST;
         $args = $this->exporter->build_export_query($filters);
-        $args['posts_per_page'] = 5; // Limit for preview
+        $args['posts_per_page'] = -1;
         $args['fields'] = 'ids';
         
-        WC_PIE_Logger::log('PREVIEW EXPORT - Final query args', $args);
-        
-        $product_ids = get_posts($args);
-        WC_PIE_Logger::log('PREVIEW EXPORT - Product IDs found', $product_ids);
-        
-        $sample_products = array();
-        
-        foreach ($product_ids as $id) {
-            $product = wc_get_product($id);
-            if (!$product) continue;
-            $sample_products[] = $product->get_name() . ' (ID: ' . $product->get_id() . ', SKU: ' . $product->get_sku() . ')';
-        }
-        
-        // Get total count
-        $args['posts_per_page'] = -1;
         $all_ids = get_posts($args);
         
-        $response_data = array(
-            'count' => count($all_ids),
-            'sample' => $sample_products,
-            'categories' => isset($_POST['product_categories']) ? implode(', ', (array)$_POST['product_categories']) : 'All',
-            'types' => isset($_POST['product_types']) ? implode(', ', (array)$_POST['product_types']) : 'All',
-            'status' => isset($_POST['product_status']) ? implode(', ', (array)$_POST['product_status']) : 'All'
-        );
-        
-        wp_send_json_success($response_data);
+        wp_send_json_success(array(
+            'count' => count($all_ids)
+        ));
     }
 
     public function init_export() {

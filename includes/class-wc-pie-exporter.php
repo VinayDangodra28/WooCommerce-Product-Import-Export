@@ -11,7 +11,9 @@ class WC_PIE_Exporter {
         
         // Clean and normalize filter arrays - handle empty strings and ensure proper arrays
         $product_status = array();
-        if (isset($filters['product_status']) && !empty($filters['product_status'])) {
+        $has_status_filter = isset($filters['product_status']);
+
+        if ($has_status_filter && !empty($filters['product_status'])) {
             if (is_array($filters['product_status'])) {
                 $product_status = array_filter($filters['product_status'], function($val) {
                     return !empty($val);
@@ -20,9 +22,14 @@ class WC_PIE_Exporter {
                 $product_status = array($filters['product_status']);
             }
         }
-        // Default to published if no status specified
-        if (empty($product_status)) {
+        
+        // Default to published if no status specified (and not explicitly empty)
+        if (!$has_status_filter && empty($product_status)) {
             $product_status = array('publish');
+        } elseif ($has_status_filter && empty($product_status)) {
+            // User explicitly deselected all statuses
+            // We'll handle this by setting a flag or ensuring query returns nothing
+            $product_status = array('none'); // 'none' is not a valid status, should return nothing
         }
         WC_PIE_Logger::log('BUILD EXPORT QUERY - Product status processed', $product_status);
         
@@ -74,67 +81,84 @@ class WC_PIE_Exporter {
             'tax_query' => array('relation' => 'AND')
         );
         
-        // Filter by product types - only add filter if specific types selected
-        if (!empty($product_types)) {
-            // Check if all common types are selected (means user wants all)
-            $all_types = array('simple', 'variable', 'grouped', 'external');
-            $is_all_types = (count($product_types) >= 4 && 
-                           in_array('simple', $product_types) && 
-                           in_array('variable', $product_types) && 
-                           in_array('grouped', $product_types) && 
-                           in_array('external', $product_types));
-            
-            // Only apply filter if not selecting all types
-            if (!$is_all_types) {
-                // WooCommerce stores product types differently:
-                // - Simple products often have no _product_type meta or it's empty
-                // - Other types have explicit meta values
-                if (in_array('simple', $product_types)) {
-                    // For simple products, we need to include products with no _product_type or _product_type = 'simple'
-                    $args['meta_query'][] = array(
-                        'relation' => 'OR',
-                        array(
+        // Filter by product types
+        if (isset($filters['product_types'])) {
+            if (empty($product_types)) {
+                // User explicitly selected no types - return nothing
+                $args['post__in'] = array(0);
+            } else {
+                // Check if all common types are selected
+                $all_types = array('simple', 'variable', 'grouped', 'external');
+                $is_all_types = !array_diff($all_types, $product_types) && count($product_types) >= 4;
+                
+                if (!$is_all_types) {
+                    // WooCommerce stores product types differently:
+                    // - Simple products often have no _product_type meta or it's empty
+                    // - Other types have explicit meta values
+                    if (in_array('simple', $product_types)) {
+                        // For simple products, we need to include products with no _product_type or _product_type = 'simple'
+                        $args['meta_query'][] = array(
+                            'relation' => 'OR',
+                            array(
+                                'key' => '_product_type',
+                                'value' => $product_types,
+                                'compare' => 'IN'
+                            ),
+                            array(
+                                'key' => '_product_type',
+                                'compare' => 'NOT EXISTS'
+                            ),
+                            array(
+                                'key' => '_product_type',
+                                'value' => '',
+                                'compare' => '='
+                            )
+                        );
+                    } else {
+                        // For non-simple products, use standard meta query
+                        $args['meta_query'][] = array(
                             'key' => '_product_type',
                             'value' => $product_types,
                             'compare' => 'IN'
-                        ),
-                        array(
-                            'key' => '_product_type',
-                            'compare' => 'NOT EXISTS'
-                        ),
-                        array(
-                            'key' => '_product_type',
-                            'value' => '',
-                            'compare' => '='
-                        )
-                    );
-                } else {
-                    // For non-simple products, use standard meta query
-                    $args['meta_query'][] = array(
-                        'key' => '_product_type',
-                        'value' => $product_types,
-                        'compare' => 'IN'
-                    );
+                        );
+                    }
                 }
             }
         }
         
-        // Filter by stock status - only add filter if specific statuses selected
-        if (!empty($stock_status)) {
-            // Check if all common statuses are selected (means user wants all)
-            $all_statuses = array('instock', 'outofstock', 'onbackorder');
-            $is_all_statuses = (count($stock_status) >= 3 && 
-                              in_array('instock', $stock_status) && 
-                              in_array('outofstock', $stock_status) && 
-                              in_array('onbackorder', $stock_status));
-            
-            // Only apply filter if not selecting all statuses
-            if (!$is_all_statuses) {
-                $args['meta_query'][] = array(
-                    'key' => '_stock_status',
-                    'value' => $stock_status,
-                    'compare' => 'IN'
-                );
+        // Filter by stock status
+        if (isset($filters['stock_status'])) {
+            if (empty($stock_status)) {
+                // User explicitly selected no stock status - return nothing
+                $args['post__in'] = array(0);
+            } else {
+                // Check if all common statuses are selected
+                $all_statuses = array('instock', 'outofstock', 'onbackorder');
+                $is_all_statuses = !array_diff($all_statuses, $stock_status) && count($stock_status) >= 3;
+                
+                if (!$is_all_statuses) {
+                    // If 'instock' is selected, we should also include products with no _stock_status meta (default is instock)
+                    if (in_array('instock', $stock_status)) {
+                        $args['meta_query'][] = array(
+                            'relation' => 'OR',
+                            array(
+                                'key' => '_stock_status',
+                                'value' => $stock_status,
+                                'compare' => 'IN'
+                            ),
+                            array(
+                                'key' => '_stock_status',
+                                'compare' => 'NOT EXISTS'
+                            )
+                        );
+                    } else {
+                        $args['meta_query'][] = array(
+                            'key' => '_stock_status',
+                            'value' => $stock_status,
+                            'compare' => 'IN'
+                        );
+                    }
+                }
             }
         }
         

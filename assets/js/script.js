@@ -64,9 +64,11 @@ jQuery(document).ready(function($) {
         $('input[type="date"]').on('change', updateLiveCount);
         
         // Close preview
+        /*
         $('.pie-preview-close').on('click', function() {
             $('#preview-results').hide();
         });
+        */
         
         // Help button
         $('.pie-btn-help').on('click', function() {
@@ -92,46 +94,14 @@ jQuery(document).ready(function($) {
                String(date.getDate()).padStart(2, '0');
     }
     
+    let liveCountTimeout;
+    
     function updateLiveCount() {
-        // Simple count estimation based on filters
-        let baseCount = parseInt($('.pie-stat-card .pie-stat-number').first().text()) || 0;
-        let multiplier = 1;
+        // Simple validation for export button
+        const hasStatus = $('input[name="product_status[]"]:checked').length > 0;
+        const hasType = $('input[name="product_types[]"]:checked').length > 0;
         
-        // Adjust based on status selections
-        const statusChecked = $('input[name="product_status[]"]:checked').length;
-        const totalStatuses = $('input[name="product_status[]"]').length;
-        multiplier *= (statusChecked / totalStatuses);
-        
-        // Adjust based on type selections
-        const typesChecked = $('input[name="product_types[]"]:checked').length;
-        const totalTypes = $('input[name="product_types[]"]').length;
-        multiplier *= (typesChecked / totalTypes);
-        
-        // Estimate based on date range
-        if ($('#enable-date-filter').is(':checked') && $('#date_from').val()) {
-            multiplier *= 0.7; // Assume 70% of products in date range
-        }
-        
-        // Estimate based on categories/tags
-        if ($('#enable-taxonomy-filter').is(':checked')) {
-            const selectedCats = $('#product_categories').val();
-            const selectedTags = $('#product_tags').val();
-            if (selectedCats && selectedCats.length > 0) {
-                multiplier *= 0.6; // Assume 60% when filtering by categories
-            }
-            if (selectedTags && selectedTags.length > 0) {
-                multiplier *= 0.8; // Assume 80% when filtering by tags
-            }
-        }
-        
-        const estimatedCount = Math.round(baseCount * multiplier);
-        $('.pie-count-number').text(estimatedCount);
-        $('#pie-export-count').text(estimatedCount);
-        
-        // Update export button state
-        const hasValidSelection = $('input[name="product_status[]"]:checked').length > 0 && 
-                                $('input[name="product_types[]"]:checked').length > 0;
-        $('#export-btn').prop('disabled', !hasValidSelection);
+        $('#export-btn').prop('disabled', !(hasStatus && hasType));
     }
     
     function showHelpDialog() {
@@ -205,125 +175,12 @@ jQuery(document).ready(function($) {
         });
     }
     
-    // Preview functionality
+    // Preview functionality removed
+    /*
     $('#preview-btn').on('click', function() {
-        const formData = getFormData();
-        
-        // Debug: Log what's being sent for preview
-        console.log('Preview FormData contents:');
-        for (const [key, value] of formData.entries()) {
-            console.log(key + ': ' + value);
-        }
-        
-        $('#preview-btn').prop('disabled', true).text('Loading Preview...');
-        
-        // Add preview action
-        formData.append('action', 'pie_preview_export');
-        
-        $.ajax({
-            url: productIE.ajax_url,
-            type: 'POST',
-            data: formData,
-            processData: false,
-            contentType: false,
-            success: function(response) {
-                if (response.success) {
-                    const data = response.data;
-                    let previewHtml = `
-                        <div class="pie-preview-stats">
-                            <div class="pie-preview-stat">
-                                <strong>${data.count}</strong> products found
-                            </div>
-                            <div class="pie-preview-filters">
-                                <div><em>Status:</em> ${data.status || 'All'}</div>
-                                <div><em>Types:</em> ${data.types || 'All'}</div>
-                                <div><em>Categories:</em> ${data.categories || 'All'}</div>
-                            </div>
-                        </div>
-                    `;
-                    
-                    if (data.sample && data.sample.length > 0) {
-                        previewHtml += `
-                            <div class="pie-preview-products">
-                                <h4>Sample Products:</h4>
-                                <ul>
-                                    ${data.sample.map(product => `<li>${product}</li>`).join('')}
-                                </ul>
-                            </div>
-                        `;
-                    }
-                    
-                    if (data.count === 0) {
-                        previewHtml = `
-                            <div class="pie-preview-empty">
-                                <div class="pie-empty-icon"><span class="dashicons dashicons-info"></span></div>
-                                <h4>No Products Found</h4>
-                                <p>No products match your current filter criteria. Try adjusting your filters and preview again.</p>
-                            </div>
-                        `;
-                    }
-                    
-                    $('#preview-content').html(previewHtml);
-                    $('#preview-results').show();
-                    
-                    // Add preview styles if not present
-                    if (!$('#pie-preview-styles').length) {
-                        $('head').append(`
-                            <style id="pie-preview-styles">
-                                .pie-preview-stats {
-                                    display: flex;
-                                    justify-content: space-between;
-                                    align-items: center;
-                                    margin-bottom: 1rem;
-                                    padding: 1rem;
-                                    background: #f8f9fa;
-                                    border-radius: 6px;
-                                }
-                                .pie-preview-stat {
-                                    font-size: 1.2rem;
-                                }
-                                .pie-preview-filters div {
-                                    font-size: 0.9rem;
-                                    color: #6c757d;
-                                    margin: 0.25rem 0;
-                                }
-                                .pie-preview-products ul {
-                                    list-style: none;
-                                    padding: 0;
-                                    margin: 0;
-                                }
-                                .pie-preview-products li {
-                                    padding: 0.5rem;
-                                    border-bottom: 1px solid #e9ecef;
-                                    font-family: monospace;
-                                    font-size: 0.9rem;
-                                }
-                                .pie-preview-empty {
-                                    text-align: center;
-                                    padding: 2rem;
-                                }
-                                .pie-preview-empty .pie-empty-icon {
-                                    margin-bottom: 1rem;
-                                }
-                                .pie-preview-empty .dashicons {
-                                    font-size: 48px;
-                                    color: #ffc107;
-                                }
-                            </style>
-                        `);
-                    }
-                } else {
-                    showNotice('error', 'Preview failed: ' + (response.data || 'Unknown error'));
-                }
-            },
-            error: function(xhr, status, error) {
-                showNotice('error', 'Preview failed: ' + error);
-            },
-            complete: function() {
-                $('#preview-btn').prop('disabled', false).html('<span class="dashicons dashicons-visibility"></span> Preview Selection');
-            }
-        });
+        // ... code removed ...
     });
+    */
     
     // Export functionality
     $('#export-btn').on('click', function() {
@@ -651,19 +508,34 @@ jQuery(document).ready(function($) {
         formData.append('nonce', productIE.nonce);
         
         // Get checkbox values for status
-        $('input[name="product_status[]"]:checked').each(function() {
-            formData.append('product_status[]', $(this).val());
-        });
+        const statuses = $('input[name="product_status[]"]:checked');
+        if (statuses.length > 0) {
+            statuses.each(function() {
+                formData.append('product_status[]', $(this).val());
+            });
+        } else {
+            formData.append('product_status', '');
+        }
         
         // Get checkbox values for types
-        $('input[name="product_types[]"]:checked').each(function() {
-            formData.append('product_types[]', $(this).val());
-        });
+        const types = $('input[name="product_types[]"]:checked');
+        if (types.length > 0) {
+            types.each(function() {
+                formData.append('product_types[]', $(this).val());
+            });
+        } else {
+            formData.append('product_types', '');
+        }
         
         // Get checkbox values for stock status
-        $('input[name="stock_status[]"]:checked').each(function() {
-            formData.append('stock_status[]', $(this).val());
-        });
+        const stocks = $('input[name="stock_status[]"]:checked');
+        if (stocks.length > 0) {
+            stocks.each(function() {
+                formData.append('stock_status[]', $(this).val());
+            });
+        } else {
+            formData.append('stock_status', '');
+        }
         
         // Get date values only if date filter is enabled
         if ($('#enable-date-filter').is(':checked')) {

@@ -153,17 +153,6 @@ class WC_PIE_Admin {
                             <button type="button" class="button button-secondary pie-btn-select-none">Deselect All</button>
                             <button type="button" class="button button-secondary pie-btn-reset">Reset Filters</button>
                         </div>
-                        
-                        <div class="pie-export-summary">
-                            <h3>Export Preview</h3>
-                            <div id="pie-live-count">
-                                <span class="pie-count-number">0</span>
-                                <span class="pie-count-label">products will be exported</span>
-                            </div>
-                            <button type="button" id="preview-btn" class="button button-secondary pie-preview-btn">
-                                <span class="dashicons dashicons-visibility"></span> Preview Selection
-                            </button>
-                        </div>
                     </div>
                     
                     <div class="pie-form-main">
@@ -422,9 +411,6 @@ class WC_PIE_Admin {
                 </div>
                 
                 <div class="export-actions">
-                    <button type="button" id="preview-btn" class="button button-secondary">
-                        <span class="dashicons dashicons-visibility"></span> Preview Selection
-                    </button>
                     <button type="button" id="export-btn" class="button button-primary">
                         <span class="dashicons dashicons-download"></span> Export Products
                     </button>
@@ -447,11 +433,6 @@ class WC_PIE_Admin {
                 </div>
             </div>
             
-            <div id="preview-results" class="preview-section" style="display: none;">
-                <h3>Export Preview</h3>
-                <div id="preview-content"></div>
-            </div>
-
             <div id="export-progress" style="display: none;">
                 <h3>Export Progress</h3>
                 <div class="progress-bar">

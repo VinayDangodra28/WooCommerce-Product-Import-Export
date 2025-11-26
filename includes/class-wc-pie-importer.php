@@ -406,6 +406,11 @@ class WC_PIE_Importer {
             $product->set_tag_ids($tag_ids);
         }
         
+        // Handle attributes for variable products BEFORE saving
+        if ($product->is_type('variable') && !empty($product_data['attributes'])) {
+            $this->import_product_attributes($product, $product_data['attributes']);
+        }
+        
         // Save product
         $product_id = $product->save();
         
@@ -416,6 +421,13 @@ class WC_PIE_Importer {
         // Handle variations for variable products
         if ($product->is_type('variable') && !empty($product_data['variations'])) {
             $this->import_product_variations($product_id, $product_data['variations'], $options);
+            
+            // Resave parent product to ensure all terms are properly synced
+            $parent_product = wc_get_product($product_id);
+            if ($parent_product) {
+                $parent_product->save();
+                WC_PIE_Logger::log('IMPORT SINGLE PRODUCT - Resaved parent after variations', array('product_id' => $product_id));
+            }
         }
         
         WC_PIE_Logger::log('IMPORT SINGLE PRODUCT - Success', array(
@@ -889,15 +901,131 @@ class WC_PIE_Importer {
      * @param array $variations Variations data
      * @param array $options Import options
      */
+    /**
+     * Import product attributes for variable products
+     * Creates taxonomy terms if they don't exist and sets them on the parent product
+     * 
+     * @param WC_Product_Variable $product
+     * @param array $attributes_data
+     */
+    private function import_product_attributes($product, $attributes_data) {
+        if (empty($attributes_data) || !is_array($attributes_data)) {
+            return;
+        }
+        
+        WC_PIE_Logger::log('IMPORT ATTRIBUTES - Start', array(
+            'product_id' => $product->get_id(),
+            'attributes_count' => count($attributes_data)
+        ));
+        
+        $product_attributes = array();
+        
+        foreach ($attributes_data as $attribute_data) {
+            $attribute_name = $attribute_data['name'] ?? '';
+            $is_taxonomy = !empty($attribute_data['taxonomy']) || strpos($attribute_name, 'pa_') === 0;
+            $is_variation = !empty($attribute_data['variation']);
+            
+            if ($is_taxonomy) {
+                // Handle taxonomy (global) attributes
+                $taxonomy = (strpos($attribute_name, 'pa_') === 0) ? $attribute_name : 'pa_' . wc_sanitize_taxonomy_name($attribute_name);
+                
+                // Register taxonomy if it doesn't exist
+                if (!taxonomy_exists($taxonomy)) {
+                    $this->register_product_attribute_taxonomy($taxonomy, $attribute_name);
+                }
+                
+                $attribute_obj = new WC_Product_Attribute();
+                $attribute_obj->set_id(wc_attribute_taxonomy_id_by_name($taxonomy));
+                $attribute_obj->set_name($taxonomy);
+                $attribute_obj->set_options($attribute_data['options'] ?? array());
+                $attribute_obj->set_position($attribute_data['position'] ?? 0);
+                $attribute_obj->set_visible($attribute_data['visible'] ?? true);
+                $attribute_obj->set_variation($is_variation);
+                
+                $product_attributes[$taxonomy] = $attribute_obj;
+                
+                WC_PIE_Logger::log('IMPORT ATTRIBUTES - Taxonomy attribute', array(
+                    'taxonomy' => $taxonomy,
+                    'options' => $attribute_data['options']
+                ));
+            } else {
+                // Handle custom (local) attributes
+                $attribute_obj = new WC_Product_Attribute();
+                $attribute_obj->set_id(0);
+                $attribute_obj->set_name($attribute_name);
+                $attribute_obj->set_options($attribute_data['options'] ?? array());
+                $attribute_obj->set_position($attribute_data['position'] ?? 0);
+                $attribute_obj->set_visible($attribute_data['visible'] ?? true);
+                $attribute_obj->set_variation($is_variation);
+                
+                $product_attributes[sanitize_title($attribute_name)] = $attribute_obj;
+                
+                WC_PIE_Logger::log('IMPORT ATTRIBUTES - Custom attribute', array(
+                    'name' => $attribute_name,
+                    'options' => $attribute_data['options']
+                ));
+            }
+        }
+        
+        $product->set_attributes($product_attributes);
+    }
+    
+    /**
+     * Register a product attribute taxonomy
+     * 
+     * @param string $taxonomy
+     * @param string $attribute_name
+     */
+    private function register_product_attribute_taxonomy($taxonomy, $attribute_name) {
+        register_taxonomy(
+            $taxonomy,
+            array('product', 'product_variation'),
+            array(
+                'hierarchical' => false,
+                'label' => ucfirst($attribute_name),
+                'query_var' => true,
+                'rewrite' => array('slug' => sanitize_title($attribute_name)),
+                'public' => true,
+                'show_ui' => true,
+                'show_in_nav_menus' => false,
+            )
+        );
+        
+        WC_PIE_Logger::log('IMPORT ATTRIBUTES - Registered taxonomy', array(
+            'taxonomy' => $taxonomy,
+            'name' => $attribute_name
+        ));
+    }
+    
+    /**
+     * Import product variations with comprehensive attribute, image, price, and stock handling
+     * Based on Stack Overflow solution but enhanced with our robust import features
+     * 
+     * @param int $parent_id
+     * @param array $variations
+     * @param array $options
+     */
     private function import_product_variations($parent_id, $variations, $options = array()) {
         if (empty($variations) || !is_array($variations)) {
             return;
         }
         
+        $skip_images = !empty($options['skip_images']) && ($options['skip_images'] === true || $options['skip_images'] === '1' || $options['skip_images'] === 1);
+        $update_existing = !empty($options['update_existing']) && ($options['update_existing'] === true || $options['update_existing'] === '1' || $options['update_existing'] === 1);
+        
         WC_PIE_Logger::log('IMPORT VARIATIONS - Start', array(
             'parent_id' => $parent_id,
-            'count' => count($variations)
+            'count' => count($variations),
+            'skip_images' => $skip_images,
+            'update_existing' => $update_existing
         ));
+        
+        // Get parent product
+        $parent_product = wc_get_product($parent_id);
+        if (!$parent_product || !$parent_product->is_type('variable')) {
+            WC_PIE_Logger::log('IMPORT VARIATIONS - Error: Parent is not a variable product', array('parent_id' => $parent_id));
+            return;
+        }
         
         foreach ($variations as $variation_data) {
             try {
@@ -907,68 +1035,296 @@ class WC_PIE_Importer {
                     $existing_variation_id = wc_get_product_id_by_sku($variation_data['sku']);
                 }
                 
-                if ($existing_variation_id && !empty($options['update_existing'])) {
+                if ($existing_variation_id && $update_existing) {
                     $variation = new WC_Product_Variation($existing_variation_id);
+                    $action = 'updated';
+                } else if ($existing_variation_id && !$update_existing) {
+                    WC_PIE_Logger::log('IMPORT VARIATIONS - Skipping existing', array('sku' => $variation_data['sku']));
+                    continue;
                 } else {
                     $variation = new WC_Product_Variation();
                     $variation->set_parent_id($parent_id);
+                    $action = 'created';
                 }
                 
-                // Set variation data
+                // Process and set variation attributes with term creation
+                if (!empty($variation_data['attributes'])) {
+                    $variation_attributes = $this->process_variation_attributes(
+                        $parent_id, 
+                        $variation_data['attributes'],
+                        $parent_product
+                    );
+                    $variation->set_attributes($variation_attributes);
+                }
+                
+                // Set SKU
                 if (!empty($variation_data['sku'])) {
                     $variation->set_sku($variation_data['sku']);
                 }
-                if (isset($variation_data['regular_price'])) {
-                    $variation->set_regular_price($variation_data['regular_price']);
+                
+                // Handle pricing with validation (same approach as simple products)
+                if (isset($variation_data['regular_price']) && $variation_data['regular_price'] !== '') {
+                    $regular_price = floatval($variation_data['regular_price']);
+                    $variation->set_regular_price($regular_price);
                 }
-                if (isset($variation_data['sale_price'])) {
-                    $variation->set_sale_price($variation_data['sale_price']);
+                
+                if (isset($variation_data['sale_price']) && $variation_data['sale_price'] !== '') {
+                    $sale_price = floatval($variation_data['sale_price']);
+                    $variation->set_sale_price($sale_price);
+                    // If sale price exists, set it as the active price
+                    $variation->set_price($sale_price);
+                } else if (isset($variation_data['regular_price']) && $variation_data['regular_price'] !== '') {
+                    // No sale price, use regular price
+                    $variation->set_price(floatval($variation_data['regular_price']));
                 }
-                if (isset($variation_data['stock_quantity'])) {
-                    $variation->set_stock_quantity($variation_data['stock_quantity']);
-                }
-                if (isset($variation_data['stock_status'])) {
-                    $variation->set_stock_status($variation_data['stock_status']);
-                }
+                
+                // Handle stock management (comprehensive approach)
                 if (isset($variation_data['manage_stock'])) {
                     $variation->set_manage_stock($variation_data['manage_stock']);
                 }
+                
+                if (isset($variation_data['stock_quantity']) && $variation_data['stock_quantity'] !== '') {
+                    $variation->set_stock_quantity(intval($variation_data['stock_quantity']));
+                    $variation->set_manage_stock(true);
+                    // Clear stock status when managing stock quantity
+                    $variation->set_stock_status('');
+                } else if (isset($variation_data['stock_status'])) {
+                    $variation->set_stock_status($variation_data['stock_status']);
+                    $variation->set_manage_stock(false);
+                } else {
+                    $variation->set_manage_stock(false);
+                }
+                
+                // Handle additional variation properties
                 if (isset($variation_data['description'])) {
                     $variation->set_description($variation_data['description']);
                 }
                 
-                // Set variation attributes
-                if (!empty($variation_data['attributes'])) {
-                    $attributes = array();
-                    foreach ($variation_data['attributes'] as $attr) {
-                        if (isset($attr['name']) && isset($attr['option'])) {
-                            $attributes[$attr['name']] = $attr['option'];
-                        }
-                    }
-                    $variation->set_attributes($attributes);
+                if (isset($variation_data['weight'])) {
+                    $variation->set_weight($variation_data['weight']);
                 }
                 
-                // Handle variation image
-                if (!empty($variation_data['image']) && empty($options['skip_images'])) {
+                if (isset($variation_data['length'])) {
+                    $variation->set_length($variation_data['length']);
+                }
+                
+                if (isset($variation_data['width'])) {
+                    $variation->set_width($variation_data['width']);
+                }
+                
+                if (isset($variation_data['height'])) {
+                    $variation->set_height($variation_data['height']);
+                }
+                
+                if (isset($variation_data['tax_class'])) {
+                    $variation->set_tax_class($variation_data['tax_class']);
+                }
+                
+                if (isset($variation_data['downloadable'])) {
+                    $variation->set_downloadable($variation_data['downloadable']);
+                }
+                
+                if (isset($variation_data['virtual'])) {
+                    $variation->set_virtual($variation_data['virtual']);
+                }
+                
+                // Handle variation image with same robust approach as simple products
+                if (!$skip_images && !empty($variation_data['image']) && is_array($variation_data['image'])) {
                     $image_id = $this->import_image_from_data($variation_data['image'], $options);
                     if ($image_id) {
                         $variation->set_image_id($image_id);
+                        WC_PIE_Logger::log('IMPORT VARIATIONS - Image imported', array(
+                            'image_id' => $image_id,
+                            'variation_sku' => $variation->get_sku()
+                        ));
                     }
                 }
                 
-                $variation->save();
+                // Final save of the variation (updates all properties set above)
+                $variation_id = $variation->save();
+                
+                // Manually set attribute meta to ensure proper display in admin
+                if (!empty($variation_data['attributes'])) {
+                    foreach ($variation_data['attributes'] as $attr) {
+                        $attribute_name = $attr['name'] ?? '';
+                        
+                        // Handle both 'option' and 'options' formats
+                        $attribute_value = '';
+                        if (isset($attr['option'])) {
+                            $attribute_value = $attr['option'];
+                        } elseif (isset($attr['options']) && is_array($attr['options']) && !empty($attr['options'])) {
+                            $attribute_value = $attr['options'][0];
+                        } elseif (isset($attr['options']) && is_string($attr['options'])) {
+                            $attribute_value = $attr['options'];
+                        }
+                        
+                        if (empty($attribute_name) || empty($attribute_value)) {
+                            continue;
+                        }
+                        
+                        $is_taxonomy = strpos($attribute_name, 'pa_') === 0;
+                        
+                        if ($is_taxonomy) {
+                            // Try to get the term by name first, then by slug
+                            $term = get_term_by('name', $attribute_value, $attribute_name);
+                            if (!$term || is_wp_error($term)) {
+                                $term = get_term_by('slug', $attribute_value, $attribute_name);
+                            }
+                            
+                            if ($term && !is_wp_error($term)) {
+                                update_post_meta($variation_id, 'attribute_' . $attribute_name, $term->slug);
+                                WC_PIE_Logger::log('IMPORT VARIATIONS - Set attribute meta', array(
+                                    'variation_id' => $variation_id,
+                                    'attribute' => $attribute_name,
+                                    'slug' => $term->slug,
+                                    'name' => $term->name
+                                ));
+                            }
+                        } else {
+                            // Use value directly for custom attributes
+                            update_post_meta($variation_id, 'attribute_' . sanitize_title($attribute_name), $attribute_value);
+                        }
+                    }
+                }
                 
                 WC_PIE_Logger::log('IMPORT VARIATIONS - Success', array(
-                    'variation_id' => $variation->get_id(),
-                    'sku' => $variation->get_sku()
+                    'variation_id' => $variation_id,
+                    'sku' => $variation->get_sku(),
+                    'action' => $action,
+                    'attributes' => $variation->get_attributes()
                 ));
                 
             } catch (Exception $e) {
                 WC_PIE_Logger::log('IMPORT VARIATIONS - Error', array(
                     'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                     'variation_data' => $variation_data
                 ));
             }
         }
+    }
+    
+    /**
+     * Process variation attributes - create terms if they don't exist
+     * Ensures parent product has all attribute terms set
+     * 
+     * @param int $parent_id
+     * @param array $attributes
+     * @param WC_Product_Variable $parent_product
+     * @return array Processed attributes for variation
+     */
+    private function process_variation_attributes($parent_id, $attributes, $parent_product) {
+        $variation_attributes = array();
+        
+        foreach ($attributes as $attr) {
+            $attribute_name = $attr['name'] ?? '';
+            
+            // Handle both 'option' (direct value) and 'options' (array from export)
+            $attribute_value = '';
+            if (isset($attr['option'])) {
+                $attribute_value = $attr['option'];
+            } elseif (isset($attr['options']) && is_array($attr['options']) && !empty($attr['options'])) {
+                $attribute_value = $attr['options'][0]; // Take first value from array
+            } elseif (isset($attr['options']) && is_string($attr['options'])) {
+                $attribute_value = $attr['options'];
+            }
+            
+            if (empty($attribute_name) || empty($attribute_value)) {
+                WC_PIE_Logger::log('IMPORT VARIATIONS - Skipping empty attribute', array(
+                    'attribute' => $attr
+                ));
+                continue;
+            }
+            
+            // Check if this is a taxonomy attribute
+            $is_taxonomy = strpos($attribute_name, 'pa_') === 0;
+            
+            if ($is_taxonomy) {
+                $taxonomy = $attribute_name;
+                
+                // Ensure taxonomy exists
+                if (!taxonomy_exists($taxonomy)) {
+                    $clean_name = str_replace('pa_', '', $taxonomy);
+                    $this->register_product_attribute_taxonomy($taxonomy, $clean_name);
+                }
+                
+                // Check if term exists by name or slug
+                $term = term_exists($attribute_value, $taxonomy);
+                if (!$term) {
+                    // Try to find by slug
+                    $term_obj = get_term_by('slug', $attribute_value, $taxonomy);
+                    if ($term_obj && !is_wp_error($term_obj)) {
+                        $term = array('term_id' => $term_obj->term_id);
+                    }
+                }
+                
+                if (!$term) {
+                    // Term doesn't exist, create it
+                    $term = wp_insert_term($attribute_value, $taxonomy);
+                    if (is_wp_error($term)) {
+                        WC_PIE_Logger::log('IMPORT VARIATIONS - Term creation error', array(
+                            'taxonomy' => $taxonomy,
+                            'term' => $attribute_value,
+                            'error' => $term->get_error_message()
+                        ));
+                        continue;
+                    }
+                    WC_PIE_Logger::log('IMPORT VARIATIONS - Created term', array(
+                        'taxonomy' => $taxonomy,
+                        'term' => $attribute_value,
+                        'term_id' => $term['term_id']
+                    ));
+                } else {
+                    $term = is_array($term) ? $term : array('term_id' => $term);
+                    WC_PIE_Logger::log('IMPORT VARIATIONS - Found existing term', array(
+                        'taxonomy' => $taxonomy,
+                        'term' => $attribute_value,
+                        'term_id' => $term['term_id']
+                    ));
+                }
+                
+                // Get term slug for variation attribute
+                $term_obj = get_term($term['term_id'], $taxonomy);
+                if ($term_obj && !is_wp_error($term_obj)) {
+                    $term_slug = $term_obj->slug;
+                    $term_name = $term_obj->name;
+                } else {
+                    $term_slug = sanitize_title($attribute_value);
+                    $term_name = $attribute_value;
+                }
+                
+                // Ensure parent product has this term set (use term name for comparison)
+                $parent_terms = wp_get_post_terms($parent_id, $taxonomy, array('fields' => 'names'));
+                if (!in_array($term_name, $parent_terms)) {
+                    wp_set_post_terms($parent_id, $term_name, $taxonomy, true);
+                    WC_PIE_Logger::log('IMPORT VARIATIONS - Set parent term', array(
+                        'parent_id' => $parent_id,
+                        'taxonomy' => $taxonomy,
+                        'term' => $term_name
+                    ));
+                }
+                
+                WC_PIE_Logger::log('IMPORT VARIATIONS - Processed taxonomy attribute', array(
+                    'taxonomy' => $taxonomy,
+                    'term_slug' => $term_slug,
+                    'term_name' => $term_name,
+                    'input_value' => $attribute_value
+                ));
+                
+                $variation_attributes[$taxonomy] = $term_slug;
+            } else {
+                // Custom attribute - use value directly
+                $sanitized_attribute = sanitize_title($attribute_name);
+                
+                WC_PIE_Logger::log('IMPORT VARIATIONS - Processed custom attribute', array(
+                    'attribute_name' => $sanitized_attribute,
+                    'value' => $attribute_value
+                ));
+                
+                $variation_attributes[$sanitized_attribute] = $attribute_value;
+            }
+        }
+        
+        return $variation_attributes;
     }
 }
