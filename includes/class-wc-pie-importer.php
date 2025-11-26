@@ -333,7 +333,17 @@ class WC_PIE_Importer {
         if (!empty($product_data['slug'])) {
             $product->set_slug($product_data['slug']);
         }
-        $product->set_status($product_data['status'] ?? 'publish');
+        // Use import_status option if set (applies to both new and updated products), otherwise use product's original status
+        $status = (!empty($options['import_status']) && $options['import_status'] === 'draft') 
+            ? 'draft' 
+            : ($product_data['status'] ?? 'publish');
+        $product->set_status($status);
+        WC_PIE_Logger::log('IMPORT SINGLE PRODUCT - Status set', array(
+            'action' => $action,
+            'import_status_option' => $options['import_status'] ?? 'not set',
+            'final_status' => $status,
+            'original_status' => $product_data['status'] ?? 'not set'
+        ));
         $product->set_featured($product_data['featured'] ?? false);
         $product->set_catalog_visibility($product_data['catalog_visibility'] ?? 'visible');
         $product->set_description($product_data['description'] ?? '');

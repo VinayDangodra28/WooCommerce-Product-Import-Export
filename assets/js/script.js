@@ -402,11 +402,14 @@ jQuery(document).ready(function($) {
     });
     
     function getImportOptions() {
-        return {
+        const options = {
             update_existing: $('#import-form input[name="update_existing"]').is(':checked') ? '1' : '0',
             skip_images: $('#import-form input[name="skip_images"]').is(':checked') ? '1' : '0',
-            preserve_ids: $('#import-form input[name="preserve_ids"]').is(':checked') ? '1' : '0'
+            preserve_ids: $('#import-form input[name="preserve_ids"]').is(':checked') ? '1' : '0',
+            import_status: $('#import-form input[name="import_status"]').is(':checked') ? 'draft' : 'publish'
         };
+        console.log('Import Options:', options);
+        return options;
     }
     
     function processImportBatch(page, totalProducts, filename, batchSize, options) {
@@ -419,6 +422,9 @@ jQuery(document).ready(function($) {
         formData.append('update_existing', options.update_existing);
         formData.append('skip_images', options.skip_images);
         formData.append('preserve_ids', options.preserve_ids);
+        formData.append('import_status', options.import_status);
+        console.log('Sending import_status to server:', options.import_status);
+        
         
         $.ajax({
             url: productIE.ajax_url,
@@ -845,6 +851,9 @@ jQuery(document).ready(function($) {
             formData.append('dedupe_images', $('#dedupe_images').is(':checked') ? '1' : '');
             formData.append('optimize_images', $('#optimize_images').is(':checked') ? '1' : '');
             formData.append('import_mode', importMode);
+            formData.append('import_status', $('input[name="import_status"]').is(':checked') ? 'draft' : 'publish');
+            
+            console.log('ZIP Import - import_status:', $('input[name="import_status"]').is(':checked') ? 'draft' : 'publish');
             
             startEnhancedImport(formData);
         });

@@ -973,7 +973,14 @@ class WC_PIE_Ajax {
             'skip_images' => isset($_POST['skip_images']) && $_POST['skip_images'] == '1',
             'preserve_ids' => isset($_POST['preserve_ids']) && $_POST['preserve_ids'] == '1',
             'dedupe_images' => isset($_POST['dedupe_images']) && $_POST['dedupe_images'] == '1',
+            'import_status' => isset($_POST['import_status']) ? sanitize_text_field($_POST['import_status']) : 'publish',
         );
+        
+        WC_PIE_Logger::log('PROCESS IMPORT BATCH - Received import_status from POST', array(
+            'import_status_raw' => $_POST['import_status'] ?? 'not set',
+            'import_status_sanitized' => $options['import_status'],
+            'all_post_data' => array_keys($_POST)
+        ));
         
         // Add images directory for ZIP imports
         if ($session_data && !empty($session_data['images_dir'])) {
@@ -1145,8 +1152,11 @@ class WC_PIE_Ajax {
             'preserve_ids' => !empty($_POST['preserve_ids']),
             'dedupe_images' => !empty($_POST['dedupe_images']),
             'optimize_images' => !empty($_POST['optimize_images']),
-            'import_mode' => sanitize_text_field($_POST['import_mode'] ?? 'standard')
+            'import_mode' => sanitize_text_field($_POST['import_mode'] ?? 'standard'),
+            'import_status' => isset($_POST['import_status']) ? sanitize_text_field($_POST['import_status']) : 'publish',
         );
+        
+        WC_PIE_Logger::log('PROCESS ZIP IMPORT - Import options', $options);
         
         try {
             if ($file_extension === 'zip') {
