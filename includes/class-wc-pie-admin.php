@@ -528,10 +528,10 @@ class WC_PIE_Admin {
                             <div class="pie-option-group">
                                 <h4>Product Management</h4>
                                 <label class="pie-option-item">
-                                    <input type="checkbox" name="update_existing" id="update_existing" value="1" />
+                                    <input type="checkbox" name="update_existing" id="update_existing" value="1" checked />
                                     <span class="pie-option-content">
                                         <span class="pie-option-title">Update Existing Products</span>
-                                        <span class="pie-option-desc">Match products by SKU and update if found</span>
+                                        <span class="pie-option-desc">Match products by SKU and update if found (Recommended)</span>
                                     </span>
                                 </label>
                                 <label class="pie-option-item">

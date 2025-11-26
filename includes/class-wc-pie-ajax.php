@@ -990,12 +990,16 @@ class WC_PIE_Ajax {
             'update_existing' => isset($_POST['update_existing']) && $_POST['update_existing'] == '1',
             'skip_images' => isset($_POST['skip_images']) && $_POST['skip_images'] == '1',
             'preserve_ids' => isset($_POST['preserve_ids']) && $_POST['preserve_ids'] == '1',
+            'dedupe_images' => isset($_POST['dedupe_images']) && $_POST['dedupe_images'] == '1',
         );
         
         // Add images directory for ZIP imports
         if ($session_data && !empty($session_data['images_dir'])) {
-            $options['images_dir'] = $session_data['images_dir'];
+            $options['use_local_images'] = true;
+            $options['local_images_dir'] = $session_data['images_dir'];
         }
+        
+        WC_PIE_Logger::log('PROCESS IMPORT BATCH - Import options', $options);
         
         $results = array(
             'imported' => 0,

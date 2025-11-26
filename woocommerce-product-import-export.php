@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Product Import Export
  * Plugin URI: https://example.com/
  * Description: Export and Import WooCommerce products with support for all product types, variations, and custom meta.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: Your Name
  * Author URI: https://example.com/
  * Text Domain: wc-product-import-export
@@ -36,7 +36,7 @@ class WooCommerceProductImportExport {
         require_once $this->plugin_path . "includes/class-wc-pie-admin.php";
         require_once $this->plugin_path . "includes/class-wc-pie-ajax.php";
     }
-    
+
     private function init_hooks() {
         // Declare HPOS compatibility
         add_action('before_woocommerce_init', array($this, 'declare_hpos_compatibility'));

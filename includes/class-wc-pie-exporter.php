@@ -310,7 +310,9 @@ class WC_PIE_Exporter {
             'virtual' => $product->is_virtual(),
             'downloadable' => $product->is_downloadable(),
             'category_ids' => $product->get_category_ids(),
+            'categories' => $this->export_product_categories($product->get_category_ids()),
             'tag_ids' => $product->get_tag_ids(),
+            'tags' => $this->export_product_tags($product->get_tag_ids()),
             'shipping_class_id' => $product->get_shipping_class_id(),
             'downloads' => $product->get_downloads(),
             'download_expiry' => $product->get_download_expiry(),
@@ -495,5 +497,58 @@ class WC_PIE_Exporter {
         }
 
         return $gallery_data;
+    }
+    
+    /**
+     * Export product categories with term details
+     * 
+     * @param array $category_ids
+     * @return array
+     */
+    private function export_product_categories($category_ids) {
+        if (empty($category_ids) || !is_array($category_ids)) {
+            return array();
+        }
+        
+        $categories = array();
+        foreach ($category_ids as $cat_id) {
+            $term = get_term($cat_id, 'product_cat');
+            if (!is_wp_error($term) && $term) {
+                $categories[] = array(
+                    'id' => $term->term_id,
+                    'name' => $term->name,
+                    'slug' => $term->slug,
+                    'description' => $term->description,
+                    'parent' => $term->parent
+                );
+            }
+        }
+        return $categories;
+    }
+    
+    /**
+     * Export product tags with term details
+     * 
+     * @param array $tag_ids
+     * @return array
+     */
+    private function export_product_tags($tag_ids) {
+        if (empty($tag_ids) || !is_array($tag_ids)) {
+            return array();
+        }
+        
+        $tags = array();
+        foreach ($tag_ids as $tag_id) {
+            $term = get_term($tag_id, 'product_tag');
+            if (!is_wp_error($term) && $term) {
+                $tags[] = array(
+                    'id' => $term->term_id,
+                    'name' => $term->name,
+                    'slug' => $term->slug,
+                    'description' => $term->description
+                );
+            }
+        }
+        return $tags;
     }
 }

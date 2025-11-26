@@ -279,9 +279,9 @@ class WC_PIE_Importer {
     public function import_single_product($product_data, $options = array()) {
         WC_PIE_Logger::log('IMPORT SINGLE PRODUCT - Start', array('data' => $product_data, 'options' => $options));
         
-        $update_existing = isset($options['update_existing']) ? $options['update_existing'] : false;
-        $skip_images = isset($options['skip_images']) ? $options['skip_images'] : false;
-        $preserve_ids = isset($options['preserve_ids']) ? $options['preserve_ids'] : false;
+        $update_existing = !empty($options['update_existing']) && ($options['update_existing'] === true || $options['update_existing'] === '1' || $options['update_existing'] === 1);
+        $skip_images = !empty($options['skip_images']) && ($options['skip_images'] === true || $options['skip_images'] === '1' || $options['skip_images'] === 1);
+        $preserve_ids = !empty($options['preserve_ids']) && ($options['preserve_ids'] === true || $options['preserve_ids'] === '1' || $options['preserve_ids'] === 1);
 
         // Check if product exists by SKU or ID
         $existing_product_id = null;
@@ -388,11 +388,34 @@ class WC_PIE_Importer {
             }
         }
         
+        // Handle categories - prefer categories array with full data, fallback to category_ids
+        if (!empty($product_data['categories'])) {
+            $category_ids = $this->process_categories_with_data($product_data['categories']);
+            $product->set_category_ids($category_ids);
+        } elseif (!empty($product_data['category_ids'])) {
+            $category_ids = $this->process_categories($product_data['category_ids']);
+            $product->set_category_ids($category_ids);
+        }
+        
+        // Handle tags - prefer tags array with full data, fallback to tag_ids
+        if (!empty($product_data['tags'])) {
+            $tag_ids = $this->process_tags_with_data($product_data['tags']);
+            $product->set_tag_ids($tag_ids);
+        } elseif (!empty($product_data['tag_ids'])) {
+            $tag_ids = $this->process_tags($product_data['tag_ids']);
+            $product->set_tag_ids($tag_ids);
+        }
+        
         // Save product
         $product_id = $product->save();
         
         if (!$product_id) {
             throw new Exception('Failed to save product');
+        }
+        
+        // Handle variations for variable products
+        if ($product->is_type('variable') && !empty($product_data['variations'])) {
+            $this->import_product_variations($product_id, $product_data['variations'], $options);
         }
         
         WC_PIE_Logger::log('IMPORT SINGLE PRODUCT - Success', array(
@@ -612,5 +635,340 @@ class WC_PIE_Importer {
         ));
 
         return $attachment_id;
+    }
+    
+    /**
+     * Process categories - create if they don't exist
+     * 
+     * @param array $category_ids Original category IDs from export
+     * @return array New category IDs
+     */
+    private function process_categories($category_ids) {
+        if (empty($category_ids) || !is_array($category_ids)) {
+            return array();
+        }
+        
+        $new_category_ids = array();
+        
+        foreach ($category_ids as $old_category_id) {
+            // Get category term from original site
+            $category = get_term($old_category_id, 'product_cat');
+            
+            if (is_wp_error($category) || !$category) {
+                WC_PIE_Logger::log('PROCESS CATEGORIES - Category not found', array('id' => $old_category_id));
+                continue;
+            }
+            
+            // Check if category exists by slug
+            $existing_term = get_term_by('slug', $category->slug, 'product_cat');
+            
+            if ($existing_term) {
+                $new_category_ids[] = $existing_term->term_id;
+                WC_PIE_Logger::log('PROCESS CATEGORIES - Found existing', array(
+                    'slug' => $category->slug,
+                    'id' => $existing_term->term_id
+                ));
+            } else {
+                // Create new category
+                $parent_id = 0;
+                if ($category->parent > 0) {
+                    // Try to find parent category
+                    $parent_term = get_term($category->parent, 'product_cat');
+                    if (!is_wp_error($parent_term) && $parent_term) {
+                        $parent_exists = get_term_by('slug', $parent_term->slug, 'product_cat');
+                        if ($parent_exists) {
+                            $parent_id = $parent_exists->term_id;
+                        }
+                    }
+                }
+                
+                $new_term = wp_insert_term(
+                    $category->name,
+                    'product_cat',
+                    array(
+                        'slug' => $category->slug,
+                        'description' => $category->description,
+                        'parent' => $parent_id
+                    )
+                );
+                
+                if (!is_wp_error($new_term)) {
+                    $new_category_ids[] = $new_term['term_id'];
+                    WC_PIE_Logger::log('PROCESS CATEGORIES - Created new', array(
+                        'name' => $category->name,
+                        'id' => $new_term['term_id']
+                    ));
+                } else {
+                    WC_PIE_Logger::log('PROCESS CATEGORIES - Creation failed', array(
+                        'name' => $category->name,
+                        'error' => $new_term->get_error_message()
+                    ));
+                }
+            }
+        }
+        
+        return $new_category_ids;
+    }
+    
+    /**
+     * Process categories with full term data - more reliable than IDs
+     * 
+     * @param array $categories Array of category data with name, slug, etc.
+     * @return array New category IDs
+     */
+    private function process_categories_with_data($categories) {
+        if (empty($categories) || !is_array($categories)) {
+            return array();
+        }
+        
+        $new_category_ids = array();
+        
+        foreach ($categories as $category_data) {
+            if (empty($category_data['slug'])) {
+                continue;
+            }
+            
+            // Check if category exists by slug
+            $existing_term = get_term_by('slug', $category_data['slug'], 'product_cat');
+            
+            if ($existing_term) {
+                $new_category_ids[] = $existing_term->term_id;
+                WC_PIE_Logger::log('PROCESS CATEGORIES DATA - Found existing', array(
+                    'slug' => $category_data['slug'],
+                    'id' => $existing_term->term_id
+                ));
+            } else {
+                // Create new category
+                $parent_id = 0;
+                if (!empty($category_data['parent'])) {
+                    // Try to find parent by ID first, then by slug if available
+                    $parent_term = get_term($category_data['parent'], 'product_cat');
+                    if (!is_wp_error($parent_term) && $parent_term) {
+                        $parent_exists = get_term_by('slug', $parent_term->slug, 'product_cat');
+                        if ($parent_exists) {
+                            $parent_id = $parent_exists->term_id;
+                        }
+                    }
+                }
+                
+                $new_term = wp_insert_term(
+                    $category_data['name'],
+                    'product_cat',
+                    array(
+                        'slug' => $category_data['slug'],
+                        'description' => $category_data['description'] ?? '',
+                        'parent' => $parent_id
+                    )
+                );
+                
+                if (!is_wp_error($new_term)) {
+                    $new_category_ids[] = $new_term['term_id'];
+                    WC_PIE_Logger::log('PROCESS CATEGORIES DATA - Created new', array(
+                        'name' => $category_data['name'],
+                        'slug' => $category_data['slug'],
+                        'id' => $new_term['term_id']
+                    ));
+                } else {
+                    WC_PIE_Logger::log('PROCESS CATEGORIES DATA - Creation failed', array(
+                        'name' => $category_data['name'],
+                        'error' => $new_term->get_error_message()
+                    ));
+                }
+            }
+        }
+        
+        return $new_category_ids;
+    }
+    
+    /**
+     * Process tags - create if they don't exist
+     * 
+     * @param array $tag_ids Original tag IDs from export
+     * @return array New tag IDs
+     */
+    private function process_tags($tag_ids) {
+        if (empty($tag_ids) || !is_array($tag_ids)) {
+            return array();
+        }
+        
+        $new_tag_ids = array();
+        
+        foreach ($tag_ids as $old_tag_id) {
+            $tag = get_term($old_tag_id, 'product_tag');
+            
+            if (is_wp_error($tag) || !$tag) {
+                continue;
+            }
+            
+            // Check if tag exists by slug
+            $existing_term = get_term_by('slug', $tag->slug, 'product_tag');
+            
+            if ($existing_term) {
+                $new_tag_ids[] = $existing_term->term_id;
+            } else {
+                // Create new tag
+                $new_term = wp_insert_term(
+                    $tag->name,
+                    'product_tag',
+                    array(
+                        'slug' => $tag->slug,
+                        'description' => $tag->description
+                    )
+                );
+                
+                if (!is_wp_error($new_term)) {
+                    $new_tag_ids[] = $new_term['term_id'];
+                }
+            }
+        }
+        
+        return $new_tag_ids;
+    }
+    
+    /**
+     * Process tags with full term data - more reliable than IDs
+     * 
+     * @param array $tags Array of tag data with name, slug, etc.
+     * @return array New tag IDs
+     */
+    private function process_tags_with_data($tags) {
+        if (empty($tags) || !is_array($tags)) {
+            return array();
+        }
+        
+        $new_tag_ids = array();
+        
+        foreach ($tags as $tag_data) {
+            if (empty($tag_data['slug'])) {
+                continue;
+            }
+            
+            // Check if tag exists by slug
+            $existing_term = get_term_by('slug', $tag_data['slug'], 'product_tag');
+            
+            if ($existing_term) {
+                $new_tag_ids[] = $existing_term->term_id;
+                WC_PIE_Logger::log('PROCESS TAGS DATA - Found existing', array(
+                    'slug' => $tag_data['slug'],
+                    'id' => $existing_term->term_id
+                ));
+            } else {
+                // Create new tag
+                $new_term = wp_insert_term(
+                    $tag_data['name'],
+                    'product_tag',
+                    array(
+                        'slug' => $tag_data['slug'],
+                        'description' => $tag_data['description'] ?? ''
+                    )
+                );
+                
+                if (!is_wp_error($new_term)) {
+                    $new_tag_ids[] = $new_term['term_id'];
+                    WC_PIE_Logger::log('PROCESS TAGS DATA - Created new', array(
+                        'name' => $tag_data['name'],
+                        'slug' => $tag_data['slug'],
+                        'id' => $new_term['term_id']
+                    ));
+                } else {
+                    WC_PIE_Logger::log('PROCESS TAGS DATA - Creation failed', array(
+                        'name' => $tag_data['name'],
+                        'error' => $new_term->get_error_message()
+                    ));
+                }
+            }
+        }
+        
+        return $new_tag_ids;
+    }
+    
+    /**
+     * Import product variations
+     * 
+     * @param int $parent_id Parent product ID
+     * @param array $variations Variations data
+     * @param array $options Import options
+     */
+    private function import_product_variations($parent_id, $variations, $options = array()) {
+        if (empty($variations) || !is_array($variations)) {
+            return;
+        }
+        
+        WC_PIE_Logger::log('IMPORT VARIATIONS - Start', array(
+            'parent_id' => $parent_id,
+            'count' => count($variations)
+        ));
+        
+        foreach ($variations as $variation_data) {
+            try {
+                // Check if variation exists by SKU
+                $existing_variation_id = null;
+                if (!empty($variation_data['sku'])) {
+                    $existing_variation_id = wc_get_product_id_by_sku($variation_data['sku']);
+                }
+                
+                if ($existing_variation_id && !empty($options['update_existing'])) {
+                    $variation = new WC_Product_Variation($existing_variation_id);
+                } else {
+                    $variation = new WC_Product_Variation();
+                    $variation->set_parent_id($parent_id);
+                }
+                
+                // Set variation data
+                if (!empty($variation_data['sku'])) {
+                    $variation->set_sku($variation_data['sku']);
+                }
+                if (isset($variation_data['regular_price'])) {
+                    $variation->set_regular_price($variation_data['regular_price']);
+                }
+                if (isset($variation_data['sale_price'])) {
+                    $variation->set_sale_price($variation_data['sale_price']);
+                }
+                if (isset($variation_data['stock_quantity'])) {
+                    $variation->set_stock_quantity($variation_data['stock_quantity']);
+                }
+                if (isset($variation_data['stock_status'])) {
+                    $variation->set_stock_status($variation_data['stock_status']);
+                }
+                if (isset($variation_data['manage_stock'])) {
+                    $variation->set_manage_stock($variation_data['manage_stock']);
+                }
+                if (isset($variation_data['description'])) {
+                    $variation->set_description($variation_data['description']);
+                }
+                
+                // Set variation attributes
+                if (!empty($variation_data['attributes'])) {
+                    $attributes = array();
+                    foreach ($variation_data['attributes'] as $attr) {
+                        if (isset($attr['name']) && isset($attr['option'])) {
+                            $attributes[$attr['name']] = $attr['option'];
+                        }
+                    }
+                    $variation->set_attributes($attributes);
+                }
+                
+                // Handle variation image
+                if (!empty($variation_data['image']) && empty($options['skip_images'])) {
+                    $image_id = $this->import_image_from_data($variation_data['image'], $options);
+                    if ($image_id) {
+                        $variation->set_image_id($image_id);
+                    }
+                }
+                
+                $variation->save();
+                
+                WC_PIE_Logger::log('IMPORT VARIATIONS - Success', array(
+                    'variation_id' => $variation->get_id(),
+                    'sku' => $variation->get_sku()
+                ));
+                
+            } catch (Exception $e) {
+                WC_PIE_Logger::log('IMPORT VARIATIONS - Error', array(
+                    'error' => $e->getMessage(),
+                    'variation_data' => $variation_data
+                ));
+            }
+        }
     }
 }
